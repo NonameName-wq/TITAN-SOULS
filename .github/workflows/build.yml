@@ -1,0 +1,73 @@
+name: Build Titan Souls arm64 APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack sources
+        run: |
+          set -e
+          for f in titan64_bundle.zip dynarmic-master.zip Titan_Souls_1.03.apk; do
+            test -f "$f" || { echo "MISSING FILE IN REPO: $f"; exit 1; }
+          done
+          unzip -q titan64_bundle.zip -d work
+          unzip -q dynarmic-master.zip -d work/ext
+          ls work work/ext
+
+      - name: Install build tools and Boost headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libboost-dev
+          mkdir -p work/boostinc
+          cp -r /usr/include/boost work/boostinc/
+
+      - name: Build native libraries (arm64-v8a)
+        run: |
+          set -e
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          echo "NDK=$NDK"
+          cmake -S work/native -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDYNARMIC_DIR="$PWD/work/ext/dynarmic-master" \
+            -DBoost_INCLUDE_DIR="$PWD/work/boostinc" -DBoost_NO_BOOST_CMAKE=ON \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_CXX_FLAGS="-DFMT_CONSTEVAL="
+          cmake --build build -j"$(nproc)"
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded build/libTestSuite.so
+          ls -la build/*.so
+
+      - name: Get apktool
+        run: curl -sSL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+
+      - name: Build and sign APK
+        run: |
+          set -e
+          java -jar apktool.jar d -f -o app Titan_Souls_1.03.apk
+          mkdir -p app/assets/guest app/lib/arm64-v8a
+          # the original 32-bit game library becomes data for the emulator
+          cp app/lib/armeabi-v7a/libTestSuite.so app/assets/guest/libTestSuite.so
+          rm -rf app/lib/armeabi-v7a
+          cp build/libTestSuite.so build/libfmodex.so build/libAmazonGamesJni.so app/lib/arm64-v8a/
+          # do not require an NVIDIA Shield
+          sed -i '/com.nvidia.feature.shield/d' app/AndroidManifest.xml
+          java -jar apktool.jar b -f -o unsigned.apk app
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$BT/zipalign" -p -f 4 unsigned.apk aligned.apk
+          keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+            -alias key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=titan64"
+          "$BT/apksigner" sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
+            --out Titan_Souls_arm64.apk aligned.apk
+          ls -la Titan_Souls_arm64.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Titan_Souls_arm64
+          path: Titan_Souls_arm64.apk
