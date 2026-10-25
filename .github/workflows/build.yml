@@ -13,9 +13,13 @@ jobs:
       - name: Unpack sources
         run: |
           set -e
-          for f in titan64_bundle.zip dynarmic-master.zip Titan_Souls_1.03.apk; do
+          for f in titan64_bundle.zip dynarmic-master.zip; do
             test -f "$f" || { echo "MISSING FILE IN REPO: $f"; exit 1; }
           done
+          # accept any .apk name (e.g. "Titan Souls_1.03.apk" with a space)
+          APK="$(ls ./*.apk | head -n1)"
+          test -n "$APK" || { echo "NO .apk FILE IN REPO"; exit 1; }
+          cp "$APK" Titan_Souls_1.03.apk
           unzip -q titan64_bundle.zip -d work
           unzip -q dynarmic-master.zip -d work/ext
           ls work work/ext
@@ -71,3 +75,4 @@ jobs:
         with:
           name: Titan_Souls_arm64
           path: Titan_Souls_arm64.apk
+          
