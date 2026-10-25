@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Unpack sources
         run: |
@@ -71,7 +71,7 @@ jobs:
             --out Titan_Souls_arm64.apk aligned.apk
           ls -la Titan_Souls_arm64.apk
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: Titan_Souls_arm64
           path: Titan_Souls_arm64.apk
