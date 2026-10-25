@@ -71,8 +71,7 @@ jobs:
             --out Titan_Souls_arm64.apk aligned.apk
           ls -la Titan_Souls_arm64.apk
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: Titan_Souls_arm64
           path: Titan_Souls_arm64.apk
-          
