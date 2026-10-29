@@ -33,7 +33,7 @@ it. No game source code is used or required, because none is publicly available.
 
 ## How it works
 
-1. **ARM32 JIT.** [dynarmic](https://github.com/merryhime/dynarmic) translates
+1. **ARM32 JIT.** [dynarmic](https://github.com/lioncash/dynarmic) translates
    the game's ARMv7 machine code into ARM64 code while the game runs. The
    original 32-bit library is treated as *data* and is shipped inside the APK
    as `assets/guest/libTestSuite.so`.
@@ -244,7 +244,7 @@ Do **not** attach the game's APK, OBB or extracted files to an issue.
 
 | Component | Used for | License |
 |---|---|---|
-| [dynarmic](https://github.com/merryhime/dynarmic) | ARM32 → ARM64 JIT | 0BSD (Copyright © 2017 merryhime). Keep its `LICENSE.txt` in the repo. |
+| [dynarmic](https://github.com/lioncash/dynarmic) | ARM32 → ARM64 JIT. Source: `lioncash/dynarmic` (snapshot in `dynarmic-master.zip`) | 0BSD. Its `LICENSE.txt` names Copyright © 2017 merryhime; keep that file and notice when redistributing. |
 | [Apktool](https://github.com/iBotPeaches/Apktool) | Unpacking / rebuilding the APK (build time only) | Apache-2.0 `[verify]` |
 | Boost (headers) | Build dependency of dynarmic | Boost Software License |
 | dynarmic's bundled libraries (`biscuit`, `fmt`, `mcl`, `oaknut`, `robin-map`, `xbyak`, `zycore`, `zydis`) | Dependencies of dynarmic | Permissive licenses, each under its own license file in `externals/*/` (see the license list in dynarmic's README). Keep them when redistributing. |
