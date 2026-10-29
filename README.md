@@ -44,14 +44,20 @@ it. No game source code is used or required, because none is publicly available.
 3. **JNI emulation.** The game's native code expects an Android Java VM. The
    loader provides a minimal `JavaVM` / `JNIEnv` that answers the calls the
    game makes (class lookups, method IDs, strings, ...).
-4. **Library replacements.** 64-bit builds of `libfmodex.so` and
-   `libAmazonGamesJni.so` are bundled so the rest of the original native
-   dependencies are satisfied on arm64.
-5. **APK repackaging.** [Apktool](https://github.com/iBotPeaches/Apktool)
+4. **Host bridges.** The loader also bridges the game's OpenGL ES, zlib and
+   Android calls to the device's own 64-bit libraries, and restores the game's
+   `.obb` expansion file from a backup location if it is missing after a
+   reinstall.
+5. **Silent audio stand-ins.** FMOD Ex (the game's closed-source, 32-bit-only
+   audio engine) is replaced inside the emulator by stubs that always report
+   success, so the game runs **without sound** for now. The bundled
+   `libfmodex.so` and `libAmazonGamesJni.so` are empty placeholders that only
+   let the Java side's `System.loadLibrary(...)` calls succeed on arm64.
+6. **APK repackaging.** [Apktool](https://github.com/iBotPeaches/Apktool)
    unpacks the original APK, the 32-bit library is moved to the guest assets,
    the arm64 libraries are added, the NVIDIA Shield requirement is removed from
    the manifest, and the result is aligned and signed with a debug key.
-6. **Diagnostics.** A watchdog prints guest thread states, system-call counts
+7. **Diagnostics.** A watchdog prints guest thread states, system-call counts
    and crash details on screen (lines starting with `[watch]`, `[crash]`,
    `[status]`, `[logcat]`). This is what you see in the red `FATAL` screens.
 
@@ -62,8 +68,8 @@ it. No game source code is used or required, because none is publicly available.
  This project (built from source)
    └── lib/arm64-v8a/
          ├── libTestSuite.so   (dynarmic loader + JNI + imports)
-         ├── libfmodex.so
-         └── libAmazonGamesJni.so
+         ├── libfmodex.so          (empty placeholder)
+         └── libAmazonGamesJni.so  (empty placeholder)
 ```
 
 ## Current status
@@ -73,7 +79,8 @@ it. No game source code is used or required, because none is publicly available.
 - [ ] C++ exception unwinding (needs `.ARM.exidx` lookup support)
 - [ ] Stable JNI emulation (some calls appear to return NULL, causing crashes)
 - [ ] Reaches the title screen reliably
-- [ ] Gameplay, audio and saving verified on real devices
+- [ ] Audio (FMOD is currently silent stubs, so the game has no sound)
+- [ ] Gameplay and saving verified on real devices
 
 ## Known issues
 
@@ -82,7 +89,7 @@ it. No game source code is used or required, because none is publicly available.
 | `a C++ exception was thrown but exception unwinding is not implemented` | The unwinder cannot find the exception tables (`.ARM.exidx`) of the loaded guest library. A lookup such as `__gnu_Unwind_Find_exidx` / `dl_iterate_phdr` must point to the guest's tables. |
 | `segmentation fault: read of 0x20` / `0x58` | NULL object plus a small field offset. Likely an unimplemented or NULL-returning JNI call (e.g. `FindClass`, `GetMethodID`, `CallStaticObjectMethod`). |
 | `segmentation fault` at addresses that look like ASCII text (e.g. `0x726576c4`) | Possible memory corruption or a thread-synchronisation race in the emulation layer. |
-| `the game called abort()` | The game detected an error and aborted; check the lines above it. |
+| `the game called abort()` | The game detected an error and aborted; check the lines above it. Note that some `abort()` / `throw` calls are currently "soft-stubbed" (logged as `[cxx] soft-stub ...` and ignored), which can hide the real problem and cause a crash later. |
 | Crashes change between runs | Suggests a race or memory problem rather than one fixed bug. |
 
 The guest library keeps its symbol names, so crash addresses can be resolved to
@@ -93,7 +100,7 @@ functions: take the guest `pc` / `lr`, convert to an offset in the original
 
 | Path | Description |
 |---|---|
-| `titan64_bundle.zip` | Project sources: native loader/emulator code (`native/`) and supporting files |
+| `titan64_bundle.zip` | Project sources: `native/` (CMake project with `src/` for the loader, ELF32 loader, HLE of libc/Android/GLES/JNI, FMOD stubs, and `stubs/`, `tests/`), plus a short `README.md` and `FIX-NOTE.txt` change notes |
 | `dynarmic-master.zip` | Snapshot of the dynarmic source used for the build |
 | `.github/workflows/` | GitHub Actions workflow *Build Titan Souls arm64 APK* |
 | `README.md` | This file |
@@ -184,8 +191,11 @@ these approaches instead:
    original.
 2. Copy `Titan_Souls_arm64.apk` to your device and install it (you may need to
    allow installs from unknown sources).
-3. If your copy of the game uses a separate OBB/expansion file, place it where
-   the original game expects it. `[Confirm for version 1.0.3.]`
+3. The game needs its **OBB expansion file** (`main.<version>.com.devolver.titansouls.obb`)
+   from your own copy. Place it in
+   `Android/obb/com.devolver.titansouls/`. If it is missing after a reinstall,
+   the app looks for a backup copy in a few common folders and restores it;
+   otherwise it logs where to put the file.
 4. Launch the game. Expect occasional crashes; see [Known issues](#known-issues).
 
 Requirements: a 64-bit ARM device (`arm64-v8a`) running Android 8.0 (API 26) or
@@ -226,18 +236,21 @@ Do **not** attach the game's APK, OBB or extracted files to an issue.
   responsible for making sure your use complies with the law where you live.
   Nothing here is legal advice.
 - If you are a rights holder and believe something in this repository infringes
-  your rights, please open an issue or contact `[your contact]` and it will be
+  your rights, please open an issue or contact **NonameName**
+  ([@NonameName-wq](https://github.com/NonameName-wq)) on GitHub and it will be
   addressed promptly.
 
 ## Third-party components
 
 | Component | Used for | License |
 |---|---|---|
-| [dynarmic](https://github.com/merryhime/dynarmic) | ARM32 → ARM64 JIT | `[verify in the dynarmic repo; keep its license file]` |
+| [dynarmic](https://github.com/merryhime/dynarmic) | ARM32 → ARM64 JIT | 0BSD (Copyright © 2017 merryhime). Keep its `LICENSE.txt` in the repo. |
 | [Apktool](https://github.com/iBotPeaches/Apktool) | Unpacking / rebuilding the APK (build time only) | Apache-2.0 `[verify]` |
 | Boost (headers) | Build dependency of dynarmic | Boost Software License |
-| `[other libraries in titan64_bundle.zip]` | | |
+| dynarmic's bundled libraries (`biscuit`, `fmt`, `mcl`, `oaknut`, `robin-map`, `xbyak`, `zycore`, `zydis`) | Dependencies of dynarmic | Permissive licenses, each under its own license file in `externals/*/` (see the license list in dynarmic's README). Keep them when redistributing. |
+| DejaVu Sans Mono | The on-screen debug font (`font8x16.h` is a bitmap generated from it) | DejaVu / Bitstream Vera license (permissive, requires keeping the notice) |
+| Android NDK system libraries (`log`, `android`, `EGL`, `GLESv2`, `z`) | Linked at build time | Provided by the platform / NDK |
 
-This project's own original code is released under `[license, e.g. MIT]`. That
-license applies **only** to the original code in this repository and **not** to
+This project's own original code is released under the **MIT License** (see
+[`LICENSE`](LICENSE)). That license applies **only** to the original code in this repository and **not** to
 *Titan Souls* or to any third-party component.
