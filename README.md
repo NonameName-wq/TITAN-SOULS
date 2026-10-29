@@ -1,87 +1,243 @@
-# Titan Souls – 64-bit Android Compatibility Layer (Experimental)
+# Titan Souls – 64-bit (arm64) Android Compatibility Layer
 
-> ⚠️ **Experimental and unstable.** The game may crash, freeze, or fail to reach the main menu. This is a work in progress.
+> ⚠️ **Experimental and unstable.** The game may crash, freeze, or fail to reach the main menu. This is a work in progress, not a finished port.
+
+> 📌 **Personal use only.** The APK produced by this project contains the original game. **Do not upload or share the built APK.** See [Legal notice](#legal-and-copyright-notice).
+
+---
+
+## Table of contents
+
+1. [What is this?](#what-is-this)
+2. [How it works](#how-it-works)
+3. [Current status](#current-status)
+4. [Known issues](#known-issues)
+5. [Repository contents](#repository-contents)
+6. [Building](#building)
+7. [Installing](#installing)
+8. [Debugging and reporting bugs](#debugging-and-reporting-bugs)
+9. [Legal and copyright notice](#legal-and-copyright-notice)
+10. [Third-party components](#third-party-components)
+
+---
 
 ## What is this?
 
-The Android build of *Titan Souls* ships only 32-bit ARMv7 native libraries
-(`armeabi-v7a`). Many modern phones have dropped 32-bit support, so the
-original APK will not install or run on them.
+The Android build of *Titan Souls* ships only **32-bit ARMv7** native libraries
+(`armeabi-v7a`). Many recent phones and tablets have dropped 32-bit support, so
+the original APK will not install or run on them.
 
-This project tries to run those unmodified 32-bit libraries on 64-bit-only
-devices by **emulating the ARM32 code at runtime** instead of recompiling it.
-No game source code is used or required.
+This project tries to run the game's **unmodified 32-bit native code** on
+64-bit-only devices by **emulating ARM32 at runtime** rather than recompiling
+it. No game source code is used or required, because none is publicly available.
 
 ## How it works
 
 1. **ARM32 JIT.** [dynarmic](https://github.com/merryhime/dynarmic) translates
-   the game's ARMv7 machine code into ARM64 code while the game runs.
-2. **Custom loader.** The game's `.so` libraries are loaded into memory
-   manually, and the game's imports (libc, pthread, math helpers such as
-   `__aeabi_idiv`, etc.) are redirected to 64-bit host implementations.
-3. **JNI emulation.** The game expects to run inside an Android Java VM.
-   A minimal fake `JavaVM` / `JNIEnv` answers the calls the game makes
-   (class lookups, method calls, strings).
-4. **Diagnostics.** A watchdog reports guest threads, system call counts and
-   crash details, which is why you may see `[watch]` and `[crash]` lines.
+   the game's ARMv7 machine code into ARM64 code while the game runs. The
+   original 32-bit library is treated as *data* and is shipped inside the APK
+   as `assets/guest/libTestSuite.so`.
+2. **Custom loader.** A 64-bit native library (also named `libTestSuite.so`, so
+   the game's Java side loads it as usual) loads the guest library into
+   emulated memory and redirects the game's imports (libc, pthread, math
+   helpers such as `__aeabi_idiv`, etc.) to 64-bit host implementations.
+3. **JNI emulation.** The game's native code expects an Android Java VM. The
+   loader provides a minimal `JavaVM` / `JNIEnv` that answers the calls the
+   game makes (class lookups, method IDs, strings, ...).
+4. **Library replacements.** 64-bit builds of `libfmodex.so` and
+   `libAmazonGamesJni.so` are bundled so the rest of the original native
+   dependencies are satisfied on arm64.
+5. **APK repackaging.** [Apktool](https://github.com/iBotPeaches/Apktool)
+   unpacks the original APK, the 32-bit library is moved to the guest assets,
+   the arm64 libraries are added, the NVIDIA Shield requirement is removed from
+   the manifest, and the result is aligned and signed with a debug key.
+6. **Diagnostics.** A watchdog prints guest thread states, system-call counts
+   and crash details on screen (lines starting with `[watch]`, `[crash]`,
+   `[status]`, `[logcat]`). This is what you see in the red `FATAL` screens.
 
-*[Adjust these points to match your actual code.]*
+```
+ Original APK (yours)
+   ├── lib/armeabi-v7a/libTestSuite.so ──► assets/guest/libTestSuite.so  (guest code, emulated)
+   └── Java / assets / resources        ──► unchanged
+ This project (built from source)
+   └── lib/arm64-v8a/
+         ├── libTestSuite.so   (dynarmic loader + JNI + imports)
+         ├── libfmodex.so
+         └── libAmazonGamesJni.so
+```
 
 ## Current status
 
 - [x] Game boots and creates its worker threads
+- [x] Guest code runs (thread pool, gamepad checker, etc.)
 - [ ] C++ exception unwinding (needs `.ARM.exidx` lookup support)
-- [ ] Stable JNI emulation (some calls currently return NULL → crash)
-- [ ] Reaches the title screen and is playable
-- [ ] Audio (the game uses FMOD Ex, 32-bit only) `[status?]`
+- [ ] Stable JNI emulation (some calls appear to return NULL, causing crashes)
+- [ ] Reaches the title screen reliably
+- [ ] Gameplay, audio and saving verified on real devices
 
 ## Known issues
 
-| Error | Likely cause |
+| Symptom (on-screen `FATAL` message) | Probable cause |
 |---|---|
-| `a C++ exception was thrown but exception unwinding is not implemented` | Unwinder cannot find the exception tables of the loaded library |
-| `segmentation fault: read of 0x58 / 0x20` | NULL object plus small offset, probably an unimplemented or NULL JNI result |
-| Crashes with changing addresses between runs | Possible memory corruption or a thread-synchronisation race |
+| `a C++ exception was thrown but exception unwinding is not implemented` | The unwinder cannot find the exception tables (`.ARM.exidx`) of the loaded guest library. A lookup such as `__gnu_Unwind_Find_exidx` / `dl_iterate_phdr` must point to the guest's tables. |
+| `segmentation fault: read of 0x20` / `0x58` | NULL object plus a small field offset. Likely an unimplemented or NULL-returning JNI call (e.g. `FindClass`, `GetMethodID`, `CallStaticObjectMethod`). |
+| `segmentation fault` at addresses that look like ASCII text (e.g. `0x726576c4`) | Possible memory corruption or a thread-synchronisation race in the emulation layer. |
+| `the game called abort()` | The game detected an error and aborted; check the lines above it. |
+| Crashes change between runs | Suggests a race or memory problem rather than one fixed bug. |
 
-## Usage
+The guest library keeps its symbol names, so crash addresses can be resolved to
+functions: take the guest `pc` / `lr`, convert to an offset in the original
+`libTestSuite.so` and use `llvm-symbolizer` or `addr2line`.
 
-1. Obtain your **own legally acquired** copy of *Titan Souls* for Android
-   (version `[1.0.3]`).
-2. Download `titan64_bundle.zip` `[from Releases / this repo]`.
-3. `[Install steps here.]`
+## Repository contents
 
-When reporting a bug, please include your device model, Android version, and
-the **full** `FATAL` line (including `pc` and `lr`) from the on-screen log.
+| Path | Description |
+|---|---|
+| `titan64_bundle.zip` | Project sources: native loader/emulator code (`native/`) and supporting files |
+| `dynarmic-master.zip` | Snapshot of the dynarmic source used for the build |
+| `.github/workflows/` | GitHub Actions workflow *Build Titan Souls arm64 APK* |
+| `README.md` | This file |
+
+> The repository should **not** contain any `.apk`, `.obb`, or other file taken
+> from the game. If you build with GitHub Actions, see
+> [Building with GitHub Actions](#building-with-github-actions) for how to do it
+> without publishing the game.
 
 ## Building
 
-`[Describe how to build, e.g. the CI workflow in .github/workflows, NDK version, CMake commands.]`
+You need **your own legally obtained copy** of the Titan Souls Android APK
+(version `1.0.3`). The build repackages that APK; it does not download or
+include the game for you.
+
+### Requirements
+
+- Linux (the workflow uses Ubuntu 24.04)
+- Android NDK (recent release with the CMake toolchain file)
+- CMake and Ninja
+- Boost headers (`libboost-dev`)
+- JDK 17 or newer
+- Android SDK build-tools (`zipalign`, `apksigner`)
+- [Apktool 2.9.3](https://github.com/iBotPeaches/Apktool/releases/tag/v2.9.3)
+
+### Manual build
+
+```bash
+# 0. Put your APK next to the sources
+cp "Titan Souls_1.03.apk" Titan_Souls_1.03.apk
+
+# 1. Unpack sources and Boost headers
+unzip -q titan64_bundle.zip -d work
+unzip -q dynarmic-master.zip -d work/ext
+mkdir -p work/boostinc && cp -r /usr/include/boost work/boostinc/
+
+# 2. Build the arm64-v8a native libraries
+cmake -S work/native -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DDYNARMIC_DIR="$PWD/work/ext/dynarmic-master" \
+  -DBoost_INCLUDE_DIR="$PWD/work/boostinc" -DBoost_NO_BOOST_CMAKE=ON \
+  -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+  -DCMAKE_CXX_FLAGS="-DFMT_CONSTEVAL="
+cmake --build build -j"$(nproc)"
+llvm-strip --strip-unneeded build/libTestSuite.so
+
+# 3. Repackage the APK
+java -jar apktool.jar d -f -o app Titan_Souls_1.03.apk
+mkdir -p app/assets/guest app/lib/arm64-v8a
+cp app/lib/armeabi-v7a/libTestSuite.so app/assets/guest/libTestSuite.so   # 32-bit game library -> emulator data
+rm -rf app/lib/armeabi-v7a
+cp build/libTestSuite.so build/libfmodex.so build/libAmazonGamesJni.so app/lib/arm64-v8a/
+sed -i '/com.nvidia.feature.shield/d' app/AndroidManifest.xml             # do not require an NVIDIA Shield
+java -jar apktool.jar b -f -o unsigned.apk app
+
+# 4. Align and sign with a debug key
+zipalign -p -f 4 unsigned.apk aligned.apk
+keytool -genkeypair -keystore debug.keystore -storepass android -keypass android \
+  -alias key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=titan64"
+apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
+  --out Titan_Souls_arm64.apk aligned.apk
+```
+
+The result is `Titan_Souls_arm64.apk`.
+
+### Building with GitHub Actions
+
+The workflow `Build Titan Souls arm64 APK` runs the same steps and uploads
+`Titan_Souls_arm64.apk` as a build artifact. Start it from the **Actions** tab
+(`workflow_dispatch`).
+
+The workflow currently expects an `.apk` file in the repository root. Because
+that file is copyrighted, **do not keep it in a public repository**. Use one of
+these approaches instead:
+
+- Run the workflow in a **private** repository you control, or
+- Change the workflow to fetch your APK from a private location (for example a
+  private release asset or a secret URL) instead of reading it from the repo.
+
+**Never publish the built APK**, and do not attach it to public Releases.
+
+## Installing
+
+1. Uninstall any existing copy of Titan Souls. The rebuilt APK is signed with a
+   different (debug) key, so Android will refuse to install it over the
+   original.
+2. Copy `Titan_Souls_arm64.apk` to your device and install it (you may need to
+   allow installs from unknown sources).
+3. If your copy of the game uses a separate OBB/expansion file, place it where
+   the original game expects it. `[Confirm for version 1.0.3.]`
+4. Launch the game. Expect occasional crashes; see [Known issues](#known-issues).
+
+Requirements: a 64-bit ARM device (`arm64-v8a`) running Android 8.0 (API 26) or
+newer, since the native build targets `android-26`.
+
+## Debugging and reporting bugs
+
+When opening an issue, please include:
+
+- Device model, chipset and Android version
+- Whether the original (unmodified) APK installs on your device
+- The **full** red `FATAL` line, including `pc` and `lr` (the on-screen text is
+  often cut off; a screenshot of the first lines is fine)
+- The last lines of the `[logcat]`, `[crash]` and `[status]` output
+- Whether the crash happens at the same point on every run
+
+Do **not** attach the game's APK, OBB or extracted files to an issue.
 
 ## Legal and copyright notice
 
-- **This project is not affiliated with, endorsed by, or sponsored by
-  Acid Nerve or Devolver Digital.**
-- *Titan Souls*, its code, art, music and all related assets are the property
-  of their respective owners. All rights reserved by them.
-- **This repository does not contain, and must not be used to distribute,
-  any part of the game**: no APK, OBB, native libraries, assets, or extracted
-  game files. You must supply your own copy, obtained legally.
-- The project contains only original compatibility code (a loader and an
-  emulation layer) written to let a legally owned copy run on hardware
-  that its original build does not support.
-- No game code is modified or redistributed. `[Confirm this is true for your bundle.]`
-- This software is provided **"as is"**, without warranty of any kind.
-- If you are a rights holder and believe something here infringes your
-  rights, please open an issue or contact `[your contact]` and it will be
+- This project is **not affiliated with, endorsed by, or sponsored by Acid Nerve
+  or Devolver Digital**.
+- *Titan Souls*, including its code, art, music and all related assets, belongs
+  to its respective owners. All rights are reserved by them.
+- This repository is intended to contain only **original compatibility code**
+  (a loader and emulation layer) and build scripts. It is meant to let a
+  **legally owned copy** of the game run on hardware its original build does
+  not support.
+- **The APK produced by the build contains the original game** (its 32-bit
+  library and assets are repackaged inside it). It is therefore for **your
+  personal use only** and **must not be redistributed**, uploaded to public
+  releases, or shared.
+- You must supply your own copy of the game, obtained legally. This project
+  does not provide it and does not help bypass any purchase or licence check.
+- This software is provided **"as is"**, without warranty of any kind. Use it at
+  your own risk.
+- Laws on reverse engineering and compatibility differ by country. You are
+  responsible for making sure your use complies with the law where you live.
+  Nothing here is legal advice.
+- If you are a rights holder and believe something in this repository infringes
+  your rights, please open an issue or contact `[your contact]` and it will be
   addressed promptly.
 
-### Third-party components
+## Third-party components
 
-| Component | Use | License |
+| Component | Used for | License |
 |---|---|---|
-| [dynarmic](https://github.com/merryhime/dynarmic) | ARM32 JIT | `[check the license in the repo]` |
-| `[other libraries]` | | |
+| [dynarmic](https://github.com/merryhime/dynarmic) | ARM32 → ARM64 JIT | `[verify in the dynarmic repo; keep its license file]` |
+| [Apktool](https://github.com/iBotPeaches/Apktool) | Unpacking / rebuilding the APK (build time only) | Apache-2.0 `[verify]` |
+| Boost (headers) | Build dependency of dynarmic | Boost Software License |
+| `[other libraries in titan64_bundle.zip]` | | |
 
-This project's own code is released under `[license, e.g. MIT]`. That license
-applies only to the original code in this repository and **not** to
-*Titan Souls* or any third-party component.
+This project's own original code is released under `[license, e.g. MIT]`. That
+license applies **only** to the original code in this repository and **not** to
+*Titan Souls* or to any third-party component.
